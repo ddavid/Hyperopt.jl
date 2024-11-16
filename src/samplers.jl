@@ -10,6 +10,11 @@ struct RandomSampler{T<:AbstractRNG} <: Sampler
     lock::ReentrantLock
 end
 
+struct Bounds
+    lower::Real
+    upper::Real
+end
+
 RandomSampler() = RandomSampler(MersenneTwister(rand(1:1000)))
 
 function RandomSampler(rng::T) where {T <: AbstractRNG}
@@ -242,19 +247,23 @@ Base.@kwdef mutable struct BOHB <: Sampler
     ## Good and bad kernel density estimator
     KDE_good::Union{MultiKDE.KDEMulti, Nothing} = nothing
     KDE_bad::Union{MultiKDE.KDEMulti, Nothing} = nothing
+    bounds::Union{Vector{Union{Bounds, Nothing}}, Nothing} = nothing
 end
 
 # object call of BOHB sampler
 function (s::BOHB)(ho, iter)
+    if s.bounds === nothing
+        s.bounds = [ dim isa Hyperopt.Continuous ? Bounds(minimum(cs), maximum(cs)) : nothing for (cs, dim) in zip(ho.candidates, ho.sampler.inner.dims)]
+    end
     # with probability ρ, return random sampled observations. 
     # If max_valid_budget is nothing, which means currently we don't have enough sample for TPE, random sample as well. 
     if rand() < s.ρ || s.max_valid_budget === nothing
         return s.random_sampler(ho, iter)
     end
-    potential_samples = [sample_potential_hyperparam(s.KDE_good, s.min_bandwidth, s.bw_factor) for _ in 1:s.N_s]
+    potential_samples = [sample_potential_hyperparam(s.KDE_good, s.min_bandwidth, s.bw_factor, s.bounds) for _ in 1:s.N_s]
     scores = [score(sample, s.KDE_good, s.KDE_bad) for sample in potential_samples]
     _, best_idx = findmax(scores)
-    [potential_samples[best_idx]]
+    return potential_samples[best_idx]
 end
 
 # Sample score l(x)/g(x), refers to line 6 of Algorithm2 in paper
@@ -295,7 +304,7 @@ function update_KDEs(ho::Hyperoptimizer{Hyperband})
 end
 
 # sample from KDEMulti
-function sample_potential_hyperparam(kde::MultiKDE.KDEMulti, min_bandwidth, bw_factor)
+function sample_potential_hyperparam(kde::MultiKDE.KDEMulti, min_bandwidth, bw_factor, bounds::Union{Vector{Union{Bounds, Nothing}}, Nothing}=nothing)
     idx = rand(1:size(kde.mat_observations)[2])
     param = [kde.observations[i][idx] for i in 1:length(kde.observations)]
     sample = Vector()
@@ -304,7 +313,7 @@ function sample_potential_hyperparam(kde::MultiKDE.KDEMulti, min_bandwidth, bw_f
         local ele
         if dim_type isa MultiKDE.ContinuousDim
             bw = bw*bw_factor
-            ele = rand(truncated(Normal(_param, bw), -_param/bw, (1-_param)/bw))
+            ele = rand(truncated(Normal(_param, bw), bounds[_i].lower, bounds[_i].upper))
         elseif dim_type isa Union{MultiKDE.CategoricalDim, MultiKDE.UnorderedCategoricalDim}
             ele = rand() < (1-bw) ? _param : rand(1:dim_type.levels)
         else

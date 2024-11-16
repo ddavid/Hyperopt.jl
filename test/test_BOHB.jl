@@ -43,4 +43,17 @@ using Optim
         Optim.minimum(res), (algorithm, Optim.minimizer(res)...)
     end
 
+    # test for keeping within the bounds of the continuous dimensions search space
+
+    bohb = @hyperopt for i=18, sampler=Hyperband(R=50, η=3, inner=BOHB(dims=[Hyperopt.Continuous(), Hyperopt.Continuous()])), a = LinRange(1,5,800), c = exp10.(LinRange(1,3,1800))
+        if state !== nothing
+            a,c = state
+        end
+        res = rand()
+        res, (a, c)
+    end
+
+    @test all(first.(bohb.history) .>= minimum(bohb.candidates[1])) && all(first.(bohb.history) .<= maximum(bohb.candidates[1]))
+    @test all(last.(bohb.history) .>= minimum(bohb.candidates[2])) && all(last.(bohb.history) .<= maximum(bohb.candidates[2]))
+
 end
